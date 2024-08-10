@@ -1,0 +1,41 @@
+watch "transmission-remote -l | grep 'Seeding\|Download\|Sum\|Up & Down\|Verifying\|Uploading'"
+
+# Follow transmission log
+journalctl -u transmission-daemon -f
+
+ffmpeg -f video4linux2 -s 800x600 -i /dev/video0 ~/tmp/out.mpg
+
+# Divide an MP3 into smaller bits (usually for sharing). segment_time is in seconds
+ffmpeg -i somefile.mp3 -f segment -segment_time 3 -c copy out%03d.mp3
+
+clear cache: sudo sync && sudo echo 3 | sudo tee /proc/sys/vm/drop_caches
+
+# Shows hidden files
+du -sch .[!.]* * |sort -h
+
+# Truncates silence. Source: https://digitalcardboard.com/blog/2009/08/25/the-sox-of-silence/
+sox $i M-${coreName}.mp3 silence 1 0.3 -30d -1 0.3 -30d;
+
+# rename multiple files
+thunar -B
+# also
+ls -v | cat -n | while read n f; do mv -n "$f" "$n.ext"; done 
+
+# incognito command line
+unset HISTFILE
+
+# unfucks paste-blocking (paste in console)
+var allowPaste = function(e){
+  e.stopImmediatePropagation();
+  return true;
+};
+document.addEventListener('paste', allowPaste, true);
+
+# Reset linux mint desktop
+marco --no-composite --replace &
+
+# Downloading overdrive audiobooks
+overdrive download <something>.odm
+
+# Downloading youtube playlist
+yt-dlp -o '%(playlist_index)s - %(id)s - %(title)s.%(ext)s' -f bestvideo+bestaudio --embed-thumbnail --add-metadata --write-playlist <playlist_url>

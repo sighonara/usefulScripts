@@ -39,3 +39,7 @@ overdrive download <something>.odm
 
 # Downloading youtube playlist
 yt-dlp -o '%(playlist_index)s - %(id)s - %(title)s.%(ext)s' -f bestvideo+bestaudio --embed-thumbnail --add-metadata --write-playlist <playlist_url>
+
+Kubernetes
+#show port forwarding across services
+kubectl get svc -o json | jq '.items[] | {name:.metadata.name, p:.spec.ports[] } | select( .p.nodePort != null ) | "\(.name): localhost:\(.p.nodePort) -> \(.p.port) -> \(.p.targetPort)"'

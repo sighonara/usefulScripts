@@ -5,6 +5,9 @@ journalctl -u transmission-daemon -f
 
 ffmpeg -f video4linux2 -s 800x600 -i /dev/video0 ~/tmp/out.mpg
 
+# Add an image to a sound-only file so the file can be uploaded to YouTube. The sound file must be AAC
+ffmpeg -loop 1 -i <imageFile> -i <soundFile> -c:v libx264 -tune stillimage -r 2 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2" -pix_fmt yuv420p -c:a copy -shortest -movflags +faststart <outputFile>.mp4
+
 # Divide an MP3 into smaller bits (usually for sharing). segment_time is in seconds
 ffmpeg -i somefile.mp3 -f segment -segment_time 3 -c copy out%03d.mp3
 

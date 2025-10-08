@@ -5,6 +5,9 @@ journalctl -u transmission-daemon -f
 
 ffmpeg -f video4linux2 -s 800x600 -i /dev/video0 ~/tmp/out.mpg
 
+# Convert an audio file to wav. This is needed for using some of the speech diarization tools like WhisperX
+ffmpeg -i ~/Downloads/Sep\ 27\ at\ 15-26.m4a -ar 16000 -ac 1 -c:a pcm_s16le ~/Downloads/Sep_27_at_15-26.wav
+
 # Add an image to a sound-only file so the file can be uploaded to YouTube. The sound file must be AAC
 ffmpeg -loop 1 -i <imageFile> -i <soundFile> -c:v libx264 -tune stillimage -r 2 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2" -pix_fmt yuv420p -c:a copy -shortest -movflags +faststart <outputFile>.mp4
 

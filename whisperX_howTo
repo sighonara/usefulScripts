@@ -1,0 +1,16 @@
+WhisperX is an enhanced version of Whisper (by OpenAI) with word-level timestamps, batching, and speaker diarization.
+It is open-source under BSD-2-Clause
+
+Prerequisites:
+- ffmpeg
+- Python 3.x. Used 3.14.
+- cloned repo: https://github.com/m-bain/whisperX. This way you can update the code and use it. If you install it like the README suggests you can't update the code.
+- HuggingFace account with the following permissions:
+-- speaker-diarization-3.1 (https://huggingface.co/pyannote/speaker-diarization-3.1)
+-- segmentation (https://huggingface.co/pyannote/segmentation-3.0)
+
+1. If the file to be processed isn't an acceptable file type, it will need to be converted to a .wav file. `ffmpeg -i <inputFile> -ar 16000 -ac 1 -c:a pcm_s16le <outputFile>`
+2. You'll need to login to huggingface via a way that the python script will realize. One option: `huggingface-cli login` and then put the token in.
+3. From the project root: `uv run python -m whisperx <inputFile> --model large-v3 --language en --diarize --min_speakers <minSpeakers> --max_speakers <maxSpeakers> --diarize_model pyannote/speaker-diarization-3.1 --device mps --compute_type float32 --batch_size 4 --beam_size 10 --patience 1 --length_penalty 1.0 --temperature 0 --temperature_increment_on_fallback 0.2 --no_speech_threshold 0.3 --compression_ratio_threshold 2.4 --logprob_threshold -1.0 --vad_method pyannote --chunk_size 30 --highlight_words True --max_line_width 80 --max_line_count 1 --print_progress True --output_dir outputs`
+3.1 NOTE: 'mps' can only be used if you've updated the code to allow it. It's SIGNIFICANTLY faster than the built-in options if you have the hardware for it.
+3.2 Knowing the number of speakers and setting the min and max values to the same can be very beneficial.

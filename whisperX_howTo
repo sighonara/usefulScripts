@@ -1,16 +1,191 @@
 WhisperX is an enhanced version of Whisper (by OpenAI) with word-level timestamps, batching, and speaker diarization.
-It is open-source under BSD-2-Clause
+It is open-source under BSD-2-Clause.
+
+Local build: whisperX 3.4.2 + local patches (see "Local patches" below). Upstream is at v3.8.6.
+Last verified: 2026-09-27.
 
 Prerequisites:
 - ffmpeg
-- Python 3.x. Used 3.14.
-- cloned repo: https://github.com/m-bain/whisperX. This way you can update the code and use it. If you install it like the README suggests you can't update the code.
-- HuggingFace account with the following permissions:
--- speaker-diarization-3.1 (https://huggingface.co/pyannote/speaker-diarization-3.1)
--- segmentation (https://huggingface.co/pyannote/segmentation-3.0)
+- Python 3.12. NOTE: the venv at ~/repos/whisperX/.venv is 3.12, not 3.14. Upstream added 3.13
+  support and dropped 3.9; 3.14 is not a supported target. Don't "upgrade" this.
+- cloned repo: https://github.com/m-bain/whisperX. This way you can update the code and use it.
+  If you install it like the README suggests you can't update the code.
+- HuggingFace account with access accepted for the diarization pipeline you actually use:
+-- speaker-diarization-3.1   (https://huggingface.co/pyannote/speaker-diarization-3.1)
+-- segmentation-3.0          (https://huggingface.co/pyannote/segmentation-3.0)
+-- speaker-diarization-community-1 (https://huggingface.co/pyannote/speaker-diarization-community-1)
+   ^ only usable once pyannote.audio 4.x is installed. See "The pyannote 4 question".
 
-1. If the file to be processed isn't an acceptable file type, it will need to be converted to a .wav file. `ffmpeg -i <inputFile> -ar 16000 -ac 1 -c:a pcm_s16le <outputFile>`
-2. You'll need to login to huggingface via a way that the python script will realize. One option: `huggingface-cli login` and then put the token in.
-3. From the project root: `uv run python -m whisperx <inputFile> --model large-v3 --language en --diarize --min_speakers <minSpeakers> --max_speakers <maxSpeakers> --diarize_model pyannote/speaker-diarization-3.1 --device mps --compute_type float32 --batch_size 4 --beam_size 10 --patience 1 --length_penalty 1.0 --temperature 0 --temperature_increment_on_fallback 0.2 --no_speech_threshold 0.3 --compression_ratio_threshold 2.4 --logprob_threshold -1.0 --vad_method pyannote --chunk_size 30 --highlight_words True --max_line_width 80 --max_line_count 1 --print_progress True --output_dir outputs`
-3.1 NOTE: 'mps' can only be used if you've updated the code to allow it. It's SIGNIFICANTLY faster than the built-in options if you have the hardware for it.
-3.2 Knowing the number of speakers and setting the min and max values to the same can be very beneficial.
+--------------------------------------------------------------------------------
+STEPS
+--------------------------------------------------------------------------------
+
+1. If the file to be processed isn't an acceptable file type, convert it to .wav:
+   `ffmpeg -i <inputFile> -ar 16000 -ac 1 -c:a pcm_s16le <outputFile>`
+   Check before re-converting: `ffprobe -v error -show_entries stream=codec_name,sample_rate,channels -of default=noprint_wrappers=1 <file>`
+   You want pcm_s16le / 16000 / 1. If it already says that, skip this step.
+
+2. Log in to HuggingFace so the python script can see the token.
+   One option: `huggingface-cli login` and then paste the token.
+
+3. From the project root (~/repos/whisperX):
+
+   `uv run python -m whisperx <inputFile> --model large-v3 --language en --diarize --diarize_model pyannote/speaker-diarization-3.1 --min_speakers 5 --max_speakers 7 --device mps --compute_type float32 --batch_size 4 --beam_size 10 --initial_prompt "<comma-separated prompts>" --print_progress True --output_dir outputs`
+
+   Everything that is NOT in that command, and used to be, was a default being restated.
+   Verified against `uv run python -m whisperx --help` on 2026-09-27:
+     --patience 1                            default is 1.0
+     --length_penalty 1.0                    default is 1.0
+     --temperature 0                         default is 0
+     --temperature_increment_on_fallback 0.2  default is 0.2
+     --compression_ratio_threshold 2.4        default is 2.4
+     --logprob_threshold -1.0                 default is -1.0
+     --vad_method pyannote                    default is pyannote
+     --chunk_size 30                          default is 30
+   Dropping them changes nothing and makes the flags that DO matter visible:
+   --model, --language, --beam_size 10 (default 5), --batch_size 4 (default 8),
+   --compute_type float32 (default float16, which fails on CPU).
+
+3.1 'mps' only works because of a local patch. It maps --device mps to:
+    ASR on cpu (CTranslate2 has no MPS backend) and diarization on mps.
+    The script prints a line saying so. It is significantly faster than all-cpu.
+
+3.2 --min_speakers / --max_speakers: the local patch treats min == max as an EXACT
+    speaker count (it passes num_speakers=N instead of a range).
+    Use equal values ONLY when you are confident every speaker talks a fair amount.
+    If one person barely speaks, forcing the exact count makes pyannote manufacture a
+    split: it will cut one talkative person into two labels to reach the number you
+    demanded. This has happened twice and both are documented in the codex
+    (2025_09_06_tarkusVell: Travis landed on both SPEAKER_04 and SPEAKER_00 because
+    Jake barely spoke; 2024_01_05_dyingGrove: SPEAKER_04 carried two people).
+    For a long session with unknown participation, give it a range and let it estimate.
+
+3.3 DO NOT pass --output_format. You want the default (all), because you need two of them:
+      <name>.spk.txt  the pipeline input (local patch, see below)
+      <name>.json     the checkpoint that --diarize_from_json reads
+    Restricting the format to spk throws away your ability to retry diarization.
+
+3.4 These three were in the old command and do nothing for you:
+      --highlight_words True --max_line_width 80 --max_line_count 1
+    They only affect srt/vtt rendering and line breaking. WriteSPK ignores writer
+    options entirely, so they have no effect on the .spk.txt you actually consume.
+
+3.5 --no_speech_threshold was set to 0.3 (default 0.6). Lowering it makes Whisper MORE
+    willing to discard a segment as silence, though only when decoding has also failed
+    the logprob threshold. If quiet table talk ever goes missing, this is the knob to
+    put back to 0.6 first. Left out of the command above.
+
+4. RETRYING DIARIZATION WITHOUT REDOING ASR (local patch, and the most useful thing here)
+
+   Before diarization the script writes the transcript out as a checkpoint. If the
+   speaker labels come out wrong, do NOT re-run from scratch. Re-run diarization only:
+
+   `uv run python -m whisperx <inputFile> --diarize_from_json outputs/<name>.json --diarize_model pyannote/speaker-diarization-3.1 --min_speakers 5 --max_speakers 7 --device mps --print_progress True --output_dir outputs`
+
+   --diarize_from_json implies --diarize. It strips any speaker labels already in the
+   checkpoint first, so stale labels from a previous run can't silently mix with new
+   ones under the same names. Only one audio file at a time.
+   On a nine-hour recording this turns a failed diarization from an overnight redo into
+   a short retry, and it lets you sweep min/max speaker values cheaply.
+
+--------------------------------------------------------------------------------
+LOCAL PATCHES (uncommitted, five files, ~260 insertions)
+--------------------------------------------------------------------------------
+Snapshot: local-m1-changes.patch. `git status` in ~/repos/whisperX shows:
+  whisperx/__main__.py  whisperx/diarize.py  whisperx/transcribe.py
+  whisperx/utils.py     whisperx/vads/pyannote.py
+
+What they add, none of which is upstream at 3.4.2:
+  1. WriteSPK / --output_format spk. Emits "[HH:MM:SS - HH:MM:SS] SPEAKER_XX: text",
+     falling back to the majority word-level speaker, then to UNK. THIS IS LOAD-BEARING:
+     every *.raw.spk.txt in the codex is this format and relabel_speakers.py reads it.
+  2. --device mps, split as described in 3.1.
+  3. --diarize_from_json plus the pre-diarization checkpoint write.
+  4. min == max treated as an exact speaker count.
+  5. pyannote 4.x compatibility: use_auth_token -> token, and handling for the 4.x
+     DiarizeOutput object.
+  6. Per-stage pyannote ProgressHook bars, and a progress counter in assign_word_speakers.
+
+--------------------------------------------------------------------------------
+THE PYANNOTE 4 QUESTION (why the Sep 22 upgrade did not stick)
+--------------------------------------------------------------------------------
+Installed right now: pyannote.audio 3.3.2. torch 2.5.1. mps available.
+
+pyannote/speaker-diarization-community-1 CANNOT run on that. Its own config.yaml says:
+    dependencies:
+      pyannote.audio: 4.0.0
+    pipeline params: clustering: VBxClustering, plda: $model/plda
+and the installed 3.3.2 exposes only AgglomerativeClustering and OracleClustering.
+There is no VBxClustering and no plda in 3.x. The model is already downloaded and
+gate-accepted in ~/.cache/huggingface/hub, so the only thing missing is the library.
+
+WHY IT REVERTED: `uv run` re-syncs the venv to uv.lock on every invocation. uv.lock
+pins pyannote-audio 3.3.2 (pyproject only asks for >=3.3.2). A pip upgrade inside the
+venv gets wiped the next time you type `uv run`. That is what venv-freeze-before-pyannote4.txt
+is a record of. To make it stick, change the dependency and re-lock, e.g.
+  uv add "pyannote.audio>=4.0"
+then confirm with
+  uv run python -c "import importlib.metadata as m; print(m.version('pyannote.audio'))"
+
+WHY IT IS WORTH DOING: community-1 uses VBx clustering instead of agglomerative.
+VBx does not need a fixed cluster count and handles speakers with little speech far
+better, which is the exact failure mode in 3.2 above. Separately, the local patch
+prefers pyannote 4's exclusive_speaker_diarization, which contains no overlapping
+speech turns. Overlapping turns are why a question and its answer keep landing on one
+speaker label in these transcripts.
+
+--------------------------------------------------------------------------------
+UPGRADING WHISPERX ITSELF: 3.4.2 -> v3.8.6
+--------------------------------------------------------------------------------
+Upstream has moved a long way. The commits that matter here:
+
+  6187d25  feat: migrate to pyannote-audio v4 with speaker-diarization-community-1
+           Upstream now does officially what patch items 5 and part of 2 do by hand,
+           and community-1 is the upstream default for --diarize_model.
+  7892a72  Optimize assign_word_speakers with interval tree for 228x speedup
+           Replaces the O(n) scan. This deletes the reason patch item 6 exists.
+           On a nine-hour file this is the difference between a long wait and none.
+  c8f7597  feat: add hotwords argument to CLI
+           --hotwords biases decoding toward rare terms. This is upstream of the whole
+           transcript-fixes.tsv spelling pipeline: Ca'armine, Shasherak, Alekeemo,
+           Ghanil, Nalcir, Zrithrak, Drennos, Tarkus Vell, Aedelfred. NOT available on
+           3.4.2, which is why step 3 above uses --initial_prompt instead. --initial_prompt
+           only conditions the first window; --hotwords applies throughout.
+  d00ec69  feat: add progress_callback to transcribe, align, and diarize
+  f2609a6  fix: revert #986 wildcard alignment that broke word-level timestamps
+  39aa9f5  fix: restore word-level timestamps for unalignable characters
+  c4c1242  fix: derive SRT/VTT cue times from word-level timestamps
+           Three timestamp-correctness fixes. Every codex citation is a timestamp.
+  064f737  fix: default compute_type to float32 on CPU
+           Makes --compute_type float32 redundant.
+  570b08b  fix: add no_repeat_ngram_size and repetition_penalty options
+           Useful against Whisper repetition loops.
+  db317c3  feat: add language-aware sentence tokenization
+  1baf8d2  feat: pass --hf_token to WhisperModel for gated model support
+  6ec4a02  chore: drop python 3.9 support   /   d13171c  feat: support python 3.13
+
+New CLI flags at v3.8.6 that do not exist locally: --hotwords, --log-level,
+--compute_type default.
+
+BEFORE YOU PULL, READ THIS:
+  - v3.8.6 has NO --output_format spk. Its choices are all/srt/vtt/txt/tsv/json/aud.
+    Pulling without re-applying WriteSPK breaks the codex pipeline completely.
+  - v3.8.6 has NO --diarize_from_json, NO mps handling (its --device help says
+    "e.g. cpu, cuda"; passing mps would go straight to CTranslate2), NO exact-count
+    behaviour, and NO pre-diarization checkpoint.
+  - v3.8.6 is hard-committed to pyannote 4: it reads output.speaker_diarization with no
+    3.x fallback. Upgrading whisperX REQUIRES doing the pyannote 4 step first.
+  - ONE PLACE THE LOCAL PATCH IS BETTER THAN UPSTREAM: upstream uses
+    output.speaker_diarization; the local patch prefers output.exclusive_speaker_diarization.
+    The exclusive annotation has no overlapping turns, which is what you want when
+    assigning one speaker per transcript segment. Keep this when rebasing.
+
+SUGGESTED ORDER:
+  1. uv add "pyannote.audio>=4.0" and verify the version sticks after `uv run`.
+  2. Re-run an already-hand-checked file with --diarize_from_json and --diarize_model
+     pyannote/speaker-diarization-community-1. Compare against the known-good labels
+     before trusting it on anything new. 2024_01_05_dyingGrove is the right test case:
+     it is short, and its documented failure is exactly the one VBx should fix.
+  3. Only then rebase the five-file patch onto v3.8.6, keeping items 1-4 and the
+     exclusive-annotation choice, and DROPPING item 6 (upstream is 228x faster) and the
+     3.x compatibility half of item 5.
